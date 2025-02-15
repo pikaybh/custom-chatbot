@@ -1,10 +1,77 @@
+networks:
+  app_network:
+    driver: bridge
+
 services:
+  nginx:
+    image: nginx:latest
+    container_name: nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./conf.d:/etc/nginx/conf.d
+      - ./ssl:/etc/nginx/ssl  # 🔥 SSL 인증서 저장소
+      - ./ssl-log:/var/log
+    depends_on:
+      - openWebUI
+    environment:
+      - DOMAIN=${DOMAIN}
+      - EMAIL=${EMAIL}
+      - DUCKDNSTOKEN=${DUCKDNSTOKEN}
+    command: >
+      sh -c '
+        # 🔥 APT 패키지를 이용해 Certbot 및 cron 설치
+        apt update && apt install -y certbot python3-venv cron;
+
+        # 🔥 Python 가상환경 생성 후 certbot 및 플러그인 설치
+        python3 -m venv /opt/certbot-env;
+        /opt/certbot-env/bin/pip install --upgrade pip;
+        /opt/certbot-env/bin/pip install certbot certbot-dns-duckdns;
+
+        # 🔥 Certbot이 플러그인을 인식하는지 확인
+        /opt/certbot-env/bin/certbot plugins;
+
+        # 🔥 SSL 디렉토리 및 Nginx 로그 디렉토리 생성
+        mkdir -p /etc/nginx/ssl/live/${DOMAIN};
+        mkdir -p /var/log/nginx;
+
+        # 🔥 DuckDNS API 토큰 저장
+        echo "dns_duckdns_token = ${DUCKDNSTOKEN}" > /etc/nginx/ssl/duckdns.ini;
+        chmod 600 /etc/nginx/ssl/duckdns.ini;
+
+        # 🔥 SSL 인증서 발급 (없을 경우)
+        echo "Requesting SSL certificate...";
+        /opt/certbot-env/bin/certbot certonly \
+          --non-interactive --agree-tos \
+          --email ${EMAIL} \
+          --authenticator dns-duckdns \
+          --dns-duckdns-credentials /etc/nginx/ssl/duckdns.ini \
+          --dns-duckdns-propagation-seconds 30 \
+          -d ${DOMAIN} -d *.${DOMAIN} \
+          --config-dir /etc/nginx/ssl \
+          --logs-dir /var/log/letsencrypt \
+          --work-dir /var/lib/letsencrypt;
+
+        # 🔥 cron에 SSL 자동 갱신 등록 (매일 오전 3시 실행)
+        echo "0 3 * * * /opt/certbot-env/bin/certbot renew --quiet --config-dir /etc/nginx/ssl --post-hook \"nginx -s reload\"" > /etc/crontab;
+        crontab /etc/crontab;
+        service cron start;
+
+        echo "Starting Nginx...";
+        exec nginx -g "daemon off;";
+      '
+    networks:
+      - app_network
+
   openWebUI:
     container_name: open-webui
     image: ghcr.io/open-webui/open-webui:main
     restart: always
-    ports:
-      - "3000:8080"
+    # ports:
+    #   - "3000:8080"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -13,6 +80,8 @@ services:
       - OLLAMA_BASE_URL=http://ollama:11434
     volumes:
       - open-webui:/app/backend/data
+    networks:
+      - app_network
 
   ollama:
     container_name: ollama
@@ -26,6 +95,8 @@ services:
       - "11434:11434"
     volumes:
       - ollama:/root/.ollama
+    networks:
+      - app_network
 
 volumes:
   ollama:
