@@ -4,6 +4,8 @@
 
 Be sure to open your port to `11434` in anyway.
 
+Be sure to allow `80` and `443` ports in external.
+
 ```bash
 sudo docker volume create ollama
 sudo docker volume create open-webui
